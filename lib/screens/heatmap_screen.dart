@@ -16,6 +16,8 @@ import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import '../providers/app_settings.dart';
 import '../providers/csv_data_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 
 class HeatmapScreen extends StatefulWidget {
   const HeatmapScreen({super.key});
@@ -434,6 +436,20 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
     gltfModelPath = null;
   }
 
+  Future<bool> _ensureStoragePermission() async {
+    final androidInfo = await DeviceInfoPlugin().androidInfo;
+    final sdk = androidInfo.version.sdkInt;
+    if (sdk >= 30) {
+      if (await Permission.manageExternalStorage.isGranted) return true;
+      final status = await Permission.manageExternalStorage.request();
+      return status.isGranted;
+    } else {
+      if (await Permission.storage.isGranted) return true;
+      final status = await Permission.storage.request();
+      return status.isGranted;
+    }
+  }
+
   void _reset3DView() {
     // Not used in custom painter (double-tap inside canvas resets),
     // but for the model_viewer, we can reload the scene to reset camera.
@@ -540,6 +556,15 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
                       label: const Text('Export heatmap PNG'),
                       onPressed: () async {
                         try {
+                          // Ask for external storage permission when exporting
+                          final granted = await _ensureStoragePermission();
+                          if (!granted) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Storage permission denied. Saving to app storage instead.')),
+                              );
+                            }
+                          }
                           final img = await renderHeatmapImage(
                             grid: gridData!,
                             metricLabel: currentMetric,
