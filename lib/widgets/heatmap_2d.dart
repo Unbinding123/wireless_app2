@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/heatmap_service.dart'; // Ensure this import path is correct
 
+// Outline thickness for each heatmap cell (in logical pixels)
+const double kCellOutlineWidth = 2.0;
+
 class Heatmap2D extends StatelessWidget {
   final List<List<double>> grid;
   final double geographicWidthRatio; // Ratio (Delta Lon / Delta Lat) for aspect correction
@@ -11,6 +14,10 @@ class Heatmap2D extends StatelessWidget {
   final double minValue;
   final double maxValue;
   final List<double>? optimalRangeOverride;
+  final bool showIndices;
+  final void Function(int row, int col)? onCellTap;
+  final int? highlightRow;
+  final int? highlightCol;
 
   const Heatmap2D({
     super.key,
@@ -22,6 +29,10 @@ class Heatmap2D extends StatelessWidget {
     required this.minValue,
     required this.maxValue,
     this.optimalRangeOverride,
+    this.showIndices = false,
+    this.onCellTap,
+    this.highlightRow,
+    this.highlightCol,
   });
 
   @override
@@ -52,9 +63,48 @@ class Heatmap2D extends StatelessWidget {
           builder: (context, constraints) {
             return AspectRatio(
               aspectRatio: aspectFromGrid,
-              child: CustomPaint(
-                painter: _HeatmapPainter(
-                    grid, showGridLines, isDark, metricLabel, minValue, maxValue, optimalRangeOverride),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTapDown: onCellTap == null
+                    ? null
+                    : (details) {
+                        final RenderBox box = context.findRenderObject() as RenderBox;
+                        final Size size = box.size;
+                        final int rows = grid.length;
+                        final int cols = grid[0].length;
+                        // Reserve margins for axes when indices are shown
+                        final double leftMargin = showIndices ? 20.0 : 0.0;
+                        final double topMargin = showIndices ? 12.0 : 0.0;
+                        final double rightMargin = showIndices ? 4.0 : 0.0;
+                        final double bottomMargin = showIndices ? 8.0 : 0.0;
+                        final double drawWidth = size.width - leftMargin - rightMargin;
+                        final double drawHeight = size.height - topMargin - bottomMargin;
+                        final double cellWidth = drawWidth / cols;
+                        final double cellHeight = drawHeight / rows;
+                        final Offset p = details.localPosition;
+                        if (p.dx < leftMargin || p.dy < topMargin ||
+                            p.dx > leftMargin + drawWidth || p.dy > topMargin + drawHeight) {
+                          onCellTap?.call(-1, -1); // deselect
+                          return;
+                        }
+                        final int c = ((p.dx - leftMargin) / cellWidth).floor().clamp(0, cols - 1);
+                        final int r = ((p.dy - topMargin) / cellHeight).floor().clamp(0, rows - 1);
+                        onCellTap?.call(r, c);
+                      },
+                child: CustomPaint(
+                  painter: _HeatmapPainter(
+                    grid,
+                    showGridLines,
+                    isDark,
+                    metricLabel,
+                    minValue,
+                    maxValue,
+                    optimalRangeOverride,
+                    showIndices,
+                    highlightRow,
+                    highlightCol,
+                  ),
+                ),
               ),
             );
           },
@@ -72,9 +122,12 @@ class _HeatmapPainter extends CustomPainter {
   final double minValue;
   final double maxValue;
   final List<double>? optimalRangeOverride;
+  final bool showIndices;
+  final int? highlightRow;
+  final int? highlightCol;
 
   _HeatmapPainter(this.grid, this.showGridLines, this.isDark,
-      this.metricLabel, this.minValue, this.maxValue, this.optimalRangeOverride);
+      this.metricLabel, this.minValue, this.maxValue, this.optimalRangeOverride, this.showIndices, this.highlightRow, this.highlightCol);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -86,9 +139,15 @@ class _HeatmapPainter extends CustomPainter {
     final rows = grid.length;
     final cols = grid[0].length;
     final paint = Paint()..isAntiAlias = false; // Avoid hairline seams between cells
-
-    final cellWidth = size.width / cols;
-    final cellHeight = size.height / rows;
+    // Margins for axes when indices enabled
+    final double leftMargin = showIndices ? 20.0 : 0.0;
+    final double topMargin = showIndices ? 12.0 : 0.0;
+    final double rightMargin = showIndices ? 4.0 : 0.0;
+    final double bottomMargin = showIndices ? 8.0 : 0.0;
+    final double drawWidth = size.width - leftMargin - rightMargin;
+    final double drawHeight = size.height - topMargin - bottomMargin;
+    final cellWidth = drawWidth / cols;
+    final cellHeight = drawHeight / rows;
 
     for (var r = 0; r < rows; r++) {
       for (var c = 0; c < cols; c++) {
@@ -98,23 +157,65 @@ class _HeatmapPainter extends CustomPainter {
         paint.color = valueToColor(cellValue, minValue, maxValue, metricLabel,
             optimalRangeOverride: optimalRangeOverride);
         
-        final double x0 = c * cellWidth;
-        final double y0 = r * cellHeight;
+        final double x0 = leftMargin + c * cellWidth;
+        final double y0 = topMargin + r * cellHeight;
         
         // Simplified and safer boundary calculation using fromLTRB
-        final double x1 = (c + 1) * cellWidth; 
-        final double y1 = (r + 1) * cellHeight;
+        final double x1 = leftMargin + (c + 1) * cellWidth; 
+        final double y1 = topMargin + (r + 1) * cellHeight;
         
         final rect = Rect.fromLTRB(x0, y0, x1, y1); 
         
         canvas.drawRect(rect, paint);
 
-        if (showGridLines) {
-          final border = Paint()
-            ..color = isDark ? Colors.white24 : Colors.black12
-            ..style = PaintingStyle.stroke;
-          canvas.drawRect(rect, border);
-        }
+    // Always draw per-cell outline to make each square distinguishable
+    final border = Paint()
+      ..color = isDark ? Colors.white : Colors.black87
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = kCellOutlineWidth;
+    canvas.drawRect(rect, border);
+      }
+    }
+
+    // Draw highlight rectangle around selected cell
+    if (highlightRow != null && highlightCol != null &&
+        highlightRow! >= 0 && highlightRow! < rows &&
+        highlightCol! >= 0 && highlightCol! < cols) {
+      final double hx0 = leftMargin + highlightCol! * cellWidth;
+      final double hy0 = topMargin + highlightRow! * cellHeight;
+      final rect = Rect.fromLTWH(hx0, hy0, cellWidth, cellHeight);
+      final highlightPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0
+        ..color = Colors.yellowAccent;
+      canvas.drawRect(rect, highlightPaint);
+    }
+
+    // Draw axis indices along top (columns) and left (rows)
+    if (showIndices) {
+      final textStyle = TextStyle(
+        color: isDark ? Colors.white60 : Colors.black87,
+        fontSize: 8,
+      );
+      // Columns labels above top edge
+      for (int c = 0; c < cols; c++) {
+        final tp = TextPainter(
+          text: TextSpan(text: c.toString(), style: textStyle),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        final dx = leftMargin + c * cellWidth + cellWidth * 0.5 - tp.width / 2;
+        final double ty = topMargin - tp.height - 2;
+        tp.paint(canvas, Offset(dx, ty));
+      }
+      // Rows labels left of left edge
+      for (int r = 0; r < rows; r++) {
+        final tp = TextPainter(
+          text: TextSpan(text: r.toString(), style: textStyle),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        final double dy = topMargin + r * cellHeight + cellHeight * 0.5 - tp.height / 2;
+        final double lx = leftMargin - tp.width - 4;
+        tp.paint(canvas, Offset(lx, dy));
       }
     }
   }
@@ -152,6 +253,9 @@ Future<ui.Image> renderHeatmapImage({
       minValue,
       maxValue,
       optimalRangeOverride,
+      false,
+      null,
+      null,
     );
     painter.paint(canvas, size);
     final picture = recorder.endRecording();
@@ -174,6 +278,9 @@ Future<ui.Image> renderHeatmapImage({
     minValue,
     maxValue,
     optimalRangeOverride,
+    false,
+    null,
+    null,
   );
   painter.paint(canvas, size);
   final picture = recorder.endRecording();

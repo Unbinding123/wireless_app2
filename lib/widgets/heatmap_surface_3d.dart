@@ -8,6 +8,10 @@ class HeatmapSurface3D extends StatefulWidget {
   final double minValue;
   final double maxValue;
   final List<double>? optimalRangeOverride;
+  final bool showIndices;
+  final void Function(int row, int col)? onCellTap;
+  final int? highlightRow;
+  final int? highlightCol;
 
   const HeatmapSurface3D({
     super.key,
@@ -16,6 +20,10 @@ class HeatmapSurface3D extends StatefulWidget {
     required this.minValue,
     required this.maxValue,
     this.optimalRangeOverride,
+    this.showIndices = false,
+    this.onCellTap,
+    this.highlightRow,
+    this.highlightCol,
   });
 
   @override
@@ -58,6 +66,32 @@ class _HeatmapSurface3DState extends State<HeatmapSurface3D> {
               _pitch = _pitch.clamp(0.1, 1.4);
             });
           },
+          onTapDown: (details) {
+            if (widget.onCellTap == null) return;
+            final Size size = Size(constraints.maxWidth, constraints.maxHeight);
+            final int rows = widget.grid.length;
+            final int cols = widget.grid[0].length;
+            final double bound = math.min(size.width, size.height) * 0.8;
+            final Offset center = Offset(size.width * 0.5, size.height * 0.55);
+            final Rect viewRect = Rect.fromCenter(center: center, width: bound, height: bound);
+            final Offset p = details.localPosition;
+            if (!viewRect.contains(p)) { widget.onCellTap?.call(-1, -1); return; }
+            final double unit = (bound * 0.9) / math.max(cols, rows);
+            final double cx = (cols - 1) / 2.0;
+            final double cz = (rows - 1) / 2.0;
+            final double cosY = math.cos(_yaw), sinY = math.sin(_yaw);
+            final double sinX = math.sin(_pitch);
+            if (sinX.abs() < 1e-6) return; // avoid division
+            final double x1 = (p.dx - center.dx) / _zoom;
+            final double z1 = (p.dy - center.dy) / (_zoom * sinX);
+            final double x = cosY * x1 - sinY * z1;
+            final double z = sinY * x1 + cosY * z1;
+            final double gc = x / unit + cx;
+            final double gr = z / unit + cz;
+            final int c = gc.round().clamp(0, cols - 1);
+            final int r = gr.round().clamp(0, rows - 1);
+            widget.onCellTap?.call(r, c);
+          },
           child: CustomPaint(
             size: Size(constraints.maxWidth, constraints.maxHeight),
             painter: _SurfacePainter(
@@ -70,6 +104,9 @@ class _HeatmapSurface3DState extends State<HeatmapSurface3D> {
               pitch: _pitch,
               zoom: _zoom,
               optimalRangeOverride: widget.optimalRangeOverride,
+              showIndices: widget.showIndices,
+              highlightRow: widget.highlightRow,
+              highlightCol: widget.highlightCol,
             ),
           ),
         );
@@ -88,6 +125,9 @@ class _SurfacePainter extends CustomPainter {
   final double pitch;
   final double zoom;
   final List<double>? optimalRangeOverride;
+  final bool showIndices;
+  final int? highlightRow;
+  final int? highlightCol;
 
   _SurfacePainter({
     required this.grid,
@@ -99,6 +139,9 @@ class _SurfacePainter extends CustomPainter {
     required this.pitch,
     required this.zoom,
     this.optimalRangeOverride,
+    required this.showIndices,
+    this.highlightRow,
+    this.highlightCol,
   });
 
   @override
@@ -110,9 +153,16 @@ class _SurfacePainter extends CustomPainter {
     final double safeRange = (maxValue - minValue).abs() < 1e-12 ? 1.0 : (maxValue - minValue);
 
     // World units and camera (enforce square cell proportion by using grid aspect)
-    final double unit = (math.min(size.width, size.height) * 0.9) / math.max(cols, rows);
-    final double heightScale = unit * 0.7;
+    // Keep the surface within a square region centered in the canvas
+    final double bound = math.min(size.width, size.height) * 0.8;
     final Offset center = Offset(size.width * 0.5, size.height * 0.55);
+    final Rect viewRect = Rect.fromCenter(center: center, width: bound, height: bound);
+    canvas.save();
+    canvas.clipRect(viewRect);
+
+    final double unit = (bound * 0.9) / math.max(cols, rows);
+    final double heightScale = unit * 0.7;
+    // center unchanged, used for projection
 
     final double cx = (cols - 1) / 2.0;
     final double cz = (rows - 1) / 2.0;
@@ -227,6 +277,79 @@ class _SurfacePainter extends CustomPainter {
         ..close();
       canvas.drawPath(path, wire);
     }
+
+    // Highlight selected cell as rectangle overlay
+    if (highlightRow != null && highlightCol != null &&
+        highlightRow! >= 0 && highlightRow! < rows &&
+        highlightCol! >= 0 && highlightCol! < cols) {
+      // Build the 4 corners for the selected cell and project
+      List<Offset?> corners = [];
+      List<Offset> screenCorners = [];
+      final double cx = (cols - 1) / 2.0;
+      final double cz = (rows - 1) / 2.0;
+      final double cosY = math.cos(yaw), sinY = math.sin(yaw);
+      final double cosX = math.cos(pitch), sinX = math.sin(pitch);
+      Offset proj(double gx, double gz) {
+        final double x = (gx - cx) * unit;
+        final double z = (gz - cz) * unit;
+        const double y = 0;
+        final double x1 = cosY * x + sinY * z;
+        final double z1 = -sinY * x + cosY * z;
+        final double y2 = cosX * y - sinX * z1;
+        return center + Offset(zoom * x1, -zoom * y2);
+      }
+      final int r = highlightRow!;
+      final int c = highlightCol!;
+      screenCorners.add(proj(c.toDouble(), r.toDouble()));
+      screenCorners.add(proj(c + 1.0, r.toDouble()));
+      screenCorners.add(proj(c + 1.0, r + 1.0));
+      screenCorners.add(proj(c.toDouble(), r + 1.0));
+      final path = Path()..addPolygon(screenCorners, true);
+      final highlightPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0
+        ..color = Colors.yellowAccent;
+      canvas.drawPath(path, highlightPaint);
+    }
+
+    // Axes indices: draw simple 0..N labels with (0,0) at top-left (row 0, col 0)
+    if (showIndices) {
+      final textStyle = TextStyle(color: isDark ? Colors.white70 : Colors.black87, fontSize: 10);
+      final int rows = grid.length;
+      final int cols = grid[0].length;
+      // Approximate corners in screen space
+      final double unit = (math.min(size.width, size.height) * 0.9) / math.max(cols, rows);
+      final double cx = (cols - 1) / 2.0;
+      final double cz = (rows - 1) / 2.0;
+      final double cosY = math.cos(yaw), sinY = math.sin(yaw);
+      final double cosX = math.cos(pitch), sinX = math.sin(pitch);
+      final Offset center = Offset(size.width * 0.5, size.height * 0.55);
+
+      Offset project(double gx, double gz) {
+        final double x = (gx - cx) * unit;
+        final double z = (gz - cz) * unit;
+        const double y = 0; // ground plane for axes
+        final double x1 = cosY * x + sinY * z;
+        final double z1 = -sinY * x + cosY * z;
+        final double y2 = cosX * y - sinX * z1;
+        return center + Offset(zoom * x1, -zoom * y2);
+      }
+
+      // Column indices along top edge (row = 0)
+      for (int c = 0; c < cols; c++) {
+        final p = project(c.toDouble(), 0.0);
+        final tp = TextPainter(text: TextSpan(text: c.toString(), style: textStyle), textDirection: TextDirection.ltr)..layout();
+        tp.paint(canvas, p + const Offset(-6, -12));
+      }
+      // Row indices along left edge (col = 0)
+      for (int r = 0; r < rows; r++) {
+        final p = project(0.0, r.toDouble());
+        final tp = TextPainter(text: TextSpan(text: r.toString(), style: textStyle), textDirection: TextDirection.ltr)..layout();
+        tp.paint(canvas, p + const Offset(-18, -2));
+      }
+    }
+
+    canvas.restore();
   }
 
   @override

@@ -11,6 +11,7 @@ import '../widgets/heatmap_2d.dart';
 import '../widgets/heatmap_3d.dart';
 import '../widgets/heatmap_surface_3d.dart';
 import '../widgets/heatmap_legend.dart';
+import '../widgets/plant_status_legend.dart';
 import 'package:model_viewer_plus/model_viewer_plus.dart';
 import '../services/gltf_service.dart';
 import 'package:provider/provider.dart';
@@ -30,6 +31,7 @@ class HeatmapScreen extends StatefulWidget {
 class _HeatmapScreenState extends State<HeatmapScreen> {
   final heatmapService = HeatmapService();
   final List<String> metrics = [
+    'Plant Status',
     'pH',
     'Temperature',
     'Humidity',
@@ -53,6 +55,12 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
   double minValue = 0.0;
   double maxValue = 0.0;
   double geographicWidthRatio = 1.0; // NEW: Aspect ratio for shape correction
+  // Selection info for clicked cell
+  int? _selectedRow;
+  int? _selectedCol;
+  Map<String, double>? _selectedValues;
+  double? _selectedLat;
+  double? _selectedLon;
   String? gltfModelPath;
   Key _modelViewerKey = UniqueKey();
   List<double>? _optimalRangeOverride; // averaged optimal range when selecting multiple metrics
@@ -66,12 +74,14 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
       try {
         final saved = context.read<AppSettings>().selectedMetrics;
         setState(() {
-          selectedMetrics = saved.isNotEmpty ? saved : metrics.where((m) => m != 'All').toSet();
+          // Default: only numeric metrics selected; Plant Status off by default
+          final base = metrics.where((m) => m != 'All' && m != 'Plant Status').toSet();
+          selectedMetrics = saved.isNotEmpty ? saved : base;
         });
         _updateGridAndValues();
       } catch (_) {
         setState(() {
-          selectedMetrics = metrics.where((m) => m != 'All').toSet();
+          selectedMetrics = metrics.where((m) => m != 'All' && m != 'Plant Status').toSet();
         });
       }
     });
@@ -126,6 +136,9 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
         'N': (parsed['N']?[i] as double?)?.toDouble() ?? double.nan,
         'P': (parsed['P']?[i] as double?)?.toDouble() ?? double.nan,
         'K': (parsed['K']?[i] as double?)?.toDouble() ?? double.nan,
+        // Encode plant status if present
+        if ((parsed['plant_status']?.length ?? 0) > i)
+          'Plant Status': encodePlantStatus(parsed['plant_status']![i]?.toString() ?? '').toDouble(),
       };
       pts.add(HeatmapPoint(
         x: lonToX[lon] ?? 0,
@@ -162,6 +175,9 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
         'N': (i < provider.n.length) ? provider.n[i] : double.nan,
         'P': (i < provider.p.length) ? provider.p[i] : double.nan,
         'K': (i < provider.k.length) ? provider.k[i] : double.nan,
+        'Plant Status': (i < provider.plantStatus.length)
+            ? encodePlantStatus(provider.plantStatus[i]).toDouble()
+            : double.nan,
       };
       pts.add(HeatmapPoint(
         x: lonToX[lon] ?? 0,
@@ -173,6 +189,106 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
       ));
     }
     return pts;
+  }
+
+  void _handleCellSelection(int row, int col) {
+    if (gridData == null || gridData!.isEmpty) return;
+    final bool isSingle = selectedMetrics.length == 1;
+    final String selectedLabel = isSingle ? selectedMetrics.first : 'Average';
+
+    // Estimate lat/lon if axes are available by linear mapping of indices
+    double? lat, lon;
+    // We don't have direct access here; could compute from heatmapService points' extents
+    try {
+      final pts = heatmapService.points.where((p) => p.lat != null && p.lon != null).toList();
+      if (pts.isNotEmpty) {
+        final lats = pts.map((p) => p.lat!).toList()..sort();
+        final lons = pts.map((p) => p.lon!).toList()..sort();
+        final minLat = lats.first, maxLat = lats.last;
+        final minLon = lons.first, maxLon = lons.last;
+        final rows = gridData!.length, cols = gridData![0].length;
+        lat = rows > 1 ? minLat + (maxLat - minLat) * (row / (rows - 1)) : minLat;
+        lon = cols > 1 ? minLon + (maxLon - minLon) * (col / (cols - 1)) : minLon;
+      }
+    } catch (_) {}
+
+    // Interpolate values for each selected metric at estimated lat/lon
+    final Map<String, double> values = {};
+    if (isSingle) {
+      values[selectedLabel] = gridData![row][col];
+    } else {
+      if (lat != null && lon != null) {
+        final metricsList = selectedMetrics.toList();
+        final all = interpolateAtForMetrics(
+          points: heatmapService.points,
+          metrics: metricsList,
+          lat: lat,
+          lon: lon,
+          start: startTime!,
+          end: endTime!,
+        );
+        values.addAll(all);
+      }
+      values['Average'] = gridData![row][col];
+    }
+
+    setState(() {
+      _selectedRow = row;
+      _selectedCol = col;
+      _selectedValues = values;
+      _selectedLat = lat;
+      _selectedLon = lon;
+    });
+  }
+
+  Widget _buildSelectionInfo() {
+    if (_selectedValues == null) return const SizedBox.shrink();
+    final isPlantStatus = _selectedValues!.keys.length == 1 && _selectedValues!.keys.first == 'Plant Status';
+    final List<Widget> chips = [];
+    if (isPlantStatus) {
+      // Always show indices and coordinates first
+      chips.add(_InfoChip(label: _selectedRow != null && _selectedCol != null ? "r=${_selectedRow}, c=${_selectedCol}" : "r=?, c=?"));
+      if (_selectedLat != null && _selectedLon != null) {
+        chips.add(_InfoChip(label: "lat ${_selectedLat!.toStringAsFixed(5)}"));
+        chips.add(_InfoChip(label: "lon ${_selectedLon!.toStringAsFixed(5)}"));
+      }
+      // Then the human-readable Plant Status
+      final v = _selectedValues!['Plant Status'] ?? double.nan;
+      final code = v.isNaN ? 0 : v.round();
+      final label = labelForPlantStatusCode(code);
+      chips.add(_InfoChip(label: label, color: colorForPlantStatusCode(code)));
+    } else {
+      // Always show indices first
+      chips.add(_InfoChip(label: _selectedRow != null && _selectedCol != null ? "r=${_selectedRow}, c=${_selectedCol}" : "r=?, c=?"));
+      if (_selectedLat != null && _selectedLon != null) {
+        chips.add(_InfoChip(label: "lat ${_selectedLat!.toStringAsFixed(5)}"));
+        chips.add(_InfoChip(label: "lon ${_selectedLon!.toStringAsFixed(5)}"));
+      }
+      // Show metric values
+      _selectedValues!.forEach((k, v) {
+        final String text = v.isFinite ? v.toStringAsFixed(2) : 'N/A';
+        chips.add(_InfoChip(label: "$k: $text"));
+      });
+    }
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Wrap(spacing: 6, runSpacing: 6, children: chips),
+    );
+  }
+
+  // Tiny pill chip used for selection info
+  Widget _InfoChip({required String label, Color? color}) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1B1D20) : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color ?? (isDark ? Colors.white24 : Colors.black12)),
+        boxShadow: [BoxShadow(color: (color ?? Colors.black).withOpacity(0.06), blurRadius: 3, offset: const Offset(0, 1))],
+      ),
+      child: Text(label, style: Theme.of(context).textTheme.bodySmall),
+    );
   }
 
   Future<void> _loadData() async {
@@ -316,6 +432,11 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
         minValue = adjustedMin;
         maxValue = adjustedMax;
         geographicWidthRatio = heatmapData.widthRatio; // NEW: Set aspect ratio
+        _selectedRow = null; // reset selection after recompute
+        _selectedCol = null;
+        _selectedValues = null;
+        _selectedLat = heatmapData.latAxis != null && _selectedRow != null ? heatmapData.latAxis![_selectedRow!] : null;
+        _selectedLon = heatmapData.lonAxis != null && _selectedCol != null ? heatmapData.lonAxis![_selectedCol!] : null;
       });
     } else {
       // When no finite values are present, still provide a non-zero range for UI
@@ -324,6 +445,11 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
         minValue = 0;
         maxValue = 1;
         geographicWidthRatio = heatmapData.widthRatio; // NEW: Still set ratio even if empty
+        _selectedRow = null;
+        _selectedCol = null;
+        _selectedValues = null;
+        _selectedLat = null;
+        _selectedLon = null;
       });
     }
   }
@@ -433,10 +559,19 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
       if (newMetric == 'All') {
         // handled by toggle button elsewhere
       } else {
-        if (selectedMetrics.contains(newMetric)) {
-          selectedMetrics.remove(newMetric);
+        if (newMetric == 'Plant Status') {
+          // Selecting Plant Status deselects everything else
+          selectedMetrics = {'Plant Status'};
         } else {
-          selectedMetrics.add(newMetric);
+          // Selecting any numeric metric removes Plant Status if it was selected
+          if (selectedMetrics.contains('Plant Status')) {
+            selectedMetrics.remove('Plant Status');
+          }
+          if (selectedMetrics.contains(newMetric)) {
+            selectedMetrics.remove(newMetric);
+          } else {
+            selectedMetrics.add(newMetric);
+          }
         }
       }
       // Keep currentMetric in sync for single selection cases
@@ -457,7 +592,7 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
     }
   }
 
-  bool get _areAllSelected => selectedMetrics.length == metrics.where((m) => m != 'All').length;
+  bool get _areAllSelected => selectedMetrics.length == metrics.where((m) => m != 'All' && m != 'Plant Status').length;
 
   void _toggleSelectAll() {
     setState(() {
@@ -466,7 +601,7 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
         selectedMetrics.clear();
       } else {
         // Select all base metrics
-        selectedMetrics = metrics.where((m) => m != 'All').toSet();
+        selectedMetrics = metrics.where((m) => m != 'All' && m != 'Plant Status').toSet();
       }
       currentMetric = selectedMetrics.length == 1 ? selectedMetrics.first : 'All';
       if (is3DView) {
@@ -646,25 +781,50 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
                   ),
                   const SizedBox(height: 8),
                   if (gridData != null && gridData!.isNotEmpty)
-                    SizedBox(
-                      height: 36,
-                      child: HeatmapLegend(
-                        minValue: minValue,
-                        maxValue: maxValue,
-                        metricLabel: selectedMetrics.length == 1 ? selectedMetrics.first : 'Average',
-                        isDark: isDark,
-                        axis: Axis.horizontal,
-                        thickness: 14,
-                        gradientMode: GradientMode.valueBased,
-                        optimalRangeOverride: _optimalRangeOverride,
-                      ),
-                    ),
+                    Builder(builder: (context) {
+                      final String label = selectedMetrics.length == 1 ? selectedMetrics.first : 'Average';
+                      if (label == 'Plant Status') {
+                        return const SizedBox(
+                          height: 28,
+                          child: PlantStatusLegend(axis: Axis.horizontal, isDense: true, spacing: 8),
+                        );
+                      }
+                      return SizedBox(
+                        height: 36,
+                        child: HeatmapLegend(
+                          minValue: minValue,
+                          maxValue: maxValue,
+                          metricLabel: label,
+                          isDark: isDark,
+                          axis: Axis.horizontal,
+                          thickness: 14,
+                          gradientMode: GradientMode.valueBased,
+                          optimalRangeOverride: _optimalRangeOverride,
+                        ),
+                      );
+                    }),
                   if (gridData != null && gridData!.isNotEmpty)
                     const SizedBox(height: 8),
                   Expanded(
                     child: (gridData != null && gridData!.isNotEmpty)
                         ? (is3DView
-                            ? _buildTexturedPlaneViewer()
+                            ? HeatmapSurface3D(
+                                grid: gridData!,
+                                metricLabel: selectedMetrics.length == 1 ? selectedMetrics.first : 'Average',
+                                minValue: minValue,
+                                maxValue: maxValue,
+                                optimalRangeOverride: _optimalRangeOverride,
+                                showIndices: true,
+                                onCellTap: (r, c) {
+                                  if (r < 0 || c < 0) {
+                                    setState(() { _selectedValues = null; _selectedRow = null; _selectedCol = null; });
+                                  } else {
+                                    _handleCellSelection(r, c);
+                                  }
+                                },
+                                highlightRow: _selectedRow,
+                                highlightCol: _selectedCol,
+                              )
                             : Heatmap2D(
                                 grid: gridData!,
                                 geographicWidthRatio: geographicWidthRatio,
@@ -672,11 +832,25 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
                                 minValue: minValue,
                                 maxValue: maxValue,
                                 optimalRangeOverride: _optimalRangeOverride,
+                                showIndices: true,
+                                onCellTap: (r, c) {
+                                  if (r < 0 || c < 0) {
+                                    setState(() { _selectedValues = null; _selectedRow = null; _selectedCol = null; });
+                                  } else {
+                                    _handleCellSelection(r, c);
+                                  }
+                                },
+                                highlightRow: _selectedRow,
+                                highlightCol: _selectedCol,
                               ))
                         : const Center(
                             child: Text("No data to display for the selected metric and time range."),
                           ),
                   ),
+                  if (_selectedValues != null) ...[
+                    const SizedBox(height: 6),
+                    _buildSelectionInfo(),
+                  ],
                   const SizedBox(height: 12),
                   if (!is3DView && (gridData != null && gridData!.isNotEmpty))
                     ElevatedButton.icon(
