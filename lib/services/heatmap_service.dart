@@ -570,6 +570,64 @@ class HeatmapService {
 
 }
 
+extension on double {
+  bool get isValidFinite => isFinite && !isNaN;
+}
+
+extension _IterableExt<T> on Iterable<T> {
+  R? firstOrNull<R>(R Function(T) map) {
+    for (final e in this) {
+      return map(e);
+    }
+    return null;
+  }
+}
+
+// Interpolate a single metric value at a given lat/lon using IDW
+double interpolateAt({
+  required List<HeatmapPoint> points,
+  required String metric,
+  required double lat,
+  required double lon,
+  required DateTime start,
+  required DateTime end,
+}) {
+  const double p = 2.0;
+  const double epsilon = 1e-12;
+  double weightedSum = 0.0;
+  double weightSum = 0.0;
+  for (final pt in points) {
+    if (pt.lat == null || pt.lon == null) continue;
+    if (pt.t.isBefore(start) || pt.t.isAfter(end)) continue;
+    final v = pt.metrics[metric];
+    if (v == null || !v.isFinite) continue;
+    final double dLat = pt.lat! - lat;
+    final double dLon = pt.lon! - lon;
+    final double dist = sqrt(dLat * dLat + dLon * dLon);
+    final double weight = 1.0 / (pow(dist, p) + epsilon);
+    weightedSum += v * weight;
+    weightSum += weight;
+  }
+  if (weightSum <= 0) return double.nan;
+  return weightedSum / weightSum;
+}
+
+// Interpolate several metrics at a given lat/lon
+Map<String, double> interpolateAtForMetrics({
+  required List<HeatmapPoint> points,
+  required List<String> metrics,
+  required double lat,
+  required double lon,
+  required DateTime start,
+  required DateTime end,
+}) {
+  final Map<String, double> out = {};
+  for (final m in metrics) {
+    out[m] = interpolateAt(points: points, metric: m, lat: lat, lon: lon, start: start, end: end);
+  }
+  return out;
+}
+
 class _Sample {
   final double lat;
   final double lon;

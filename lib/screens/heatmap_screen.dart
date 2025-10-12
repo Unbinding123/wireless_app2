@@ -193,26 +193,51 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
 
   void _handleCellSelection(int row, int col) {
     if (gridData == null || gridData!.isEmpty) return;
-    final isSingle = selectedMetrics.length == 1;
-    final selectedLabel = isSingle ? selectedMetrics.first : 'Average';
-    // Gather values for currently selected metrics
+    final bool isSingle = selectedMetrics.length == 1;
+    final String selectedLabel = isSingle ? selectedMetrics.first : 'Average';
+
+    // Estimate lat/lon if axes are available by linear mapping of indices
+    double? lat, lon;
+    // We don't have direct access here; could compute from heatmapService points' extents
+    try {
+      final pts = heatmapService.points.where((p) => p.lat != null && p.lon != null).toList();
+      if (pts.isNotEmpty) {
+        final lats = pts.map((p) => p.lat!).toList()..sort();
+        final lons = pts.map((p) => p.lon!).toList()..sort();
+        final minLat = lats.first, maxLat = lats.last;
+        final minLon = lons.first, maxLon = lons.last;
+        final rows = gridData!.length, cols = gridData![0].length;
+        lat = rows > 1 ? minLat + (maxLat - minLat) * (row / (rows - 1)) : minLat;
+        lon = cols > 1 ? minLon + (maxLon - minLon) * (col / (cols - 1)) : minLon;
+      }
+    } catch (_) {}
+
+    // Interpolate values for each selected metric at estimated lat/lon
     final Map<String, double> values = {};
     if (isSingle) {
       values[selectedLabel] = gridData![row][col];
     } else {
-      for (final m in selectedMetrics) {
-        // When multiple metrics are selected, we cannot directly retrieve each metric's per-cell value
-        // because the grid is averaged. For now, display the averaged value under 'Average'.
+      if (lat != null && lon != null) {
+        final metricsList = selectedMetrics.toList();
+        final all = interpolateAtForMetrics(
+          points: heatmapService.points,
+          metrics: metricsList,
+          lat: lat,
+          lon: lon,
+          start: startTime!,
+          end: endTime!,
+        );
+        values.addAll(all);
       }
       values['Average'] = gridData![row][col];
     }
+
     setState(() {
       _selectedRow = row;
       _selectedCol = col;
       _selectedValues = values;
-      // We don't have per-cell lat/lon mapping here; show indices only.
-      _selectedLat = null;
-      _selectedLon = null;
+      _selectedLat = lat;
+      _selectedLon = lon;
     });
   }
 
