@@ -30,6 +30,7 @@ class HeatmapScreen extends StatefulWidget {
 
 class _HeatmapScreenState extends State<HeatmapScreen> {
   final heatmapService = HeatmapService();
+  final HeatmapSurface3DController _surface3DController = HeatmapSurface3DController();
   final List<String> metrics = [
     'Plant Status',
     'pH',
@@ -714,11 +715,10 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
   }
 
   void _reset3DView() {
-    // Not used in custom painter (double-tap inside canvas resets),
-    // but for the model_viewer, we can reload the scene to reset camera.
-    setState(() {
-      _modelViewerKey = UniqueKey(); // force widget reload
-    });
+    // For the custom 3D surface, call controller.reset().
+    // For the (unused) model_viewer path, keep reload fallback.
+    _surface3DController.reset();
+    setState(() { _modelViewerKey = UniqueKey(); });
   }
 
   @override
@@ -838,6 +838,7 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
                                 maxValue: maxValue,
                                 optimalRangeOverride: _optimalRangeOverride,
                                 showIndices: true,
+                                controller: _surface3DController,
                                 onCellTap: (r, c) {
                                   if (r < 0 || c < 0) {
                                     setState(() { _selectedValues = null; _selectedRow = null; _selectedCol = null; });
