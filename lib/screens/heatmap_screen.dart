@@ -55,6 +55,12 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
   double minValue = 0.0;
   double maxValue = 0.0;
   double geographicWidthRatio = 1.0; // NEW: Aspect ratio for shape correction
+  // Selection info for clicked cell
+  int? _selectedRow;
+  int? _selectedCol;
+  Map<String, double>? _selectedValues;
+  double? _selectedLat;
+  double? _selectedLon;
   String? gltfModelPath;
   Key _modelViewerKey = UniqueKey();
   List<double>? _optimalRangeOverride; // averaged optimal range when selecting multiple metrics
@@ -183,6 +189,64 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
       ));
     }
     return pts;
+  }
+
+  void _handleCellSelection(int row, int col) {
+    if (gridData == null || gridData!.isEmpty) return;
+    final isSingle = selectedMetrics.length == 1;
+    final selectedLabel = isSingle ? selectedMetrics.first : 'Average';
+    // Gather values for currently selected metrics
+    final Map<String, double> values = {};
+    if (isSingle) {
+      values[selectedLabel] = gridData![row][col];
+    } else {
+      for (final m in selectedMetrics) {
+        // When multiple metrics are selected, we cannot directly retrieve each metric's per-cell value
+        // because the grid is averaged. For now, display the averaged value under 'Average'.
+      }
+      values['Average'] = gridData![row][col];
+    }
+    setState(() {
+      _selectedRow = row;
+      _selectedCol = col;
+      _selectedValues = values;
+      // We don't have per-cell lat/lon mapping here; show indices only.
+      _selectedLat = null;
+      _selectedLon = null;
+    });
+  }
+
+  Widget _buildSelectionInfo() {
+    if (_selectedValues == null) return const SizedBox.shrink();
+    final isPlantStatus = _selectedValues!.keys.length == 1 && _selectedValues!.keys.first == 'Plant Status';
+    String valueText;
+    if (isPlantStatus) {
+      final v = _selectedValues!['Plant Status'] ?? double.nan;
+      final code = v.isNaN ? 0 : v.round();
+      valueText = labelForPlantStatusCode(code);
+    } else {
+      valueText = _selectedValues!.entries
+          .map((e) => "${e.key}: ${e.value.isFinite ? e.value.toStringAsFixed(2) : 'N/A'}")
+          .join("    ");
+    }
+    final locText = (_selectedRow != null && _selectedCol != null)
+        ? "Cell [r=${_selectedRow}, c=${_selectedCol}]"
+        : "Cell [unknown]";
+    final geoText = (_selectedLat != null && _selectedLon != null)
+        ? "  lat=${_selectedLat!.toStringAsFixed(6)}, lon=${_selectedLon!.toStringAsFixed(6)}"
+        : "";
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Theme.of(context).brightness == Brightness.dark ? const Color(0x22111111) : const Color(0x22CCCCCC),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text("$locText$geoText    $valueText"),
+      ),
+    );
   }
 
   Future<void> _loadData() async {
@@ -326,6 +390,11 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
         minValue = adjustedMin;
         maxValue = adjustedMax;
         geographicWidthRatio = heatmapData.widthRatio; // NEW: Set aspect ratio
+        _selectedRow = null; // reset selection after recompute
+        _selectedCol = null;
+        _selectedValues = null;
+        _selectedLat = heatmapData.latAxis != null && _selectedRow != null ? heatmapData.latAxis![_selectedRow!] : null;
+        _selectedLon = heatmapData.lonAxis != null && _selectedCol != null ? heatmapData.lonAxis![_selectedCol!] : null;
       });
     } else {
       // When no finite values are present, still provide a non-zero range for UI
@@ -334,6 +403,11 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
         minValue = 0;
         maxValue = 1;
         geographicWidthRatio = heatmapData.widthRatio; // NEW: Still set ratio even if empty
+        _selectedRow = null;
+        _selectedCol = null;
+        _selectedValues = null;
+        _selectedLat = null;
+        _selectedLon = null;
       });
     }
   }
@@ -443,10 +517,19 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
       if (newMetric == 'All') {
         // handled by toggle button elsewhere
       } else {
-        if (selectedMetrics.contains(newMetric)) {
-          selectedMetrics.remove(newMetric);
+        if (newMetric == 'Plant Status') {
+          // Selecting Plant Status deselects everything else
+          selectedMetrics = {'Plant Status'};
         } else {
-          selectedMetrics.add(newMetric);
+          // Selecting any numeric metric removes Plant Status if it was selected
+          if (selectedMetrics.contains('Plant Status')) {
+            selectedMetrics.remove('Plant Status');
+          }
+          if (selectedMetrics.contains(newMetric)) {
+            selectedMetrics.remove(newMetric);
+          } else {
+            selectedMetrics.add(newMetric);
+          }
         }
       }
       // Keep currentMetric in sync for single selection cases
@@ -680,7 +763,17 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
                   Expanded(
                     child: (gridData != null && gridData!.isNotEmpty)
                         ? (is3DView
-                            ? _buildTexturedPlaneViewer()
+                            ? HeatmapSurface3D(
+                                grid: gridData!,
+                                metricLabel: selectedMetrics.length == 1 ? selectedMetrics.first : 'Average',
+                                minValue: minValue,
+                                maxValue: maxValue,
+                                optimalRangeOverride: _optimalRangeOverride,
+                                showIndices: true,
+                                onCellTap: (r, c) {
+                                  _handleCellSelection(r, c);
+                                },
+                              )
                             : Heatmap2D(
                                 grid: gridData!,
                                 geographicWidthRatio: geographicWidthRatio,
@@ -688,11 +781,19 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
                                 minValue: minValue,
                                 maxValue: maxValue,
                                 optimalRangeOverride: _optimalRangeOverride,
+                                showIndices: true,
+                                onCellTap: (r, c) {
+                                  _handleCellSelection(r, c);
+                                },
                               ))
                         : const Center(
                             child: Text("No data to display for the selected metric and time range."),
                           ),
                   ),
+                  if (_selectedValues != null) ...[
+                    const SizedBox(height: 8),
+                    _buildSelectionInfo(),
+                  ],
                   const SizedBox(height: 12),
                   if (!is3DView && (gridData != null && gridData!.isNotEmpty))
                     ElevatedButton.icon(

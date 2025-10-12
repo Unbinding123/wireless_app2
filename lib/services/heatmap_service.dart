@@ -9,8 +9,15 @@ import 'package:intl/intl.dart';
 class HeatmapGrid {
   final List<List<double>> grid;
   final double widthRatio; // Delta Lon / Delta Lat
+  final List<double>? latAxis; // optional: grid row positions in latitude
+  final List<double>? lonAxis; // optional: grid column positions in longitude
 
-  HeatmapGrid({required this.grid, required this.widthRatio});
+  HeatmapGrid({
+    required this.grid,
+    required this.widthRatio,
+    this.latAxis,
+    this.lonAxis,
+  });
 }
 
 // A single data point
@@ -332,7 +339,7 @@ class HeatmapService {
     if (candidates.isEmpty) {
       // Fallback to index-based grid with a square ratio
       final fallbackGrid = createGrid(metric: metric, start: start, end: end);
-      return HeatmapGrid(grid: fallbackGrid, widthRatio: 1.0);
+      return HeatmapGrid(grid: fallbackGrid, widthRatio: 1.0, latAxis: null, lonAxis: null);
     }
 
     // Determine resolution
@@ -413,7 +420,7 @@ class HeatmapService {
       }
     }
     
-    return HeatmapGrid(grid: grid, widthRatio: ratio);
+    return HeatmapGrid(grid: grid, widthRatio: ratio, latAxis: latAxis, lonAxis: lonAxis);
   }
 
   // Build a uniform, seamless grid using lat/lon and averaging across selected metrics
@@ -437,7 +444,7 @@ class HeatmapService {
     if (candidates.isEmpty) {
       // Fallback to index-based grid with a square ratio
       final fallbackGrid = createGridForMetrics(metrics: metrics, start: start, end: end);
-      return HeatmapGrid(grid: fallbackGrid, widthRatio: 1.0);
+      return HeatmapGrid(grid: fallbackGrid, widthRatio: 1.0, latAxis: null, lonAxis: null);
     }
 
     // Determine resolution
@@ -518,7 +525,7 @@ class HeatmapService {
       }
     }
 
-    return HeatmapGrid(grid: grid, widthRatio: ratio);
+    return HeatmapGrid(grid: grid, widthRatio: ratio, latAxis: latAxis, lonAxis: lonAxis);
   }
 
   double _metricValue(HeatmapPoint p, String metric) {
