@@ -262,23 +262,27 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
       // Show all symptoms for this selected cell (nearest sample)
       final v = _selectedValues!['Plant Status'] ?? double.nan;
       final code = v.isNaN ? 0 : v.round();
-      // Add a count chip
-      chips.add(_InfoChip(label: "count: $code", color: colorForPlantStatusCode(code)));
-      List<String> syms = [];
-      if (_selectedLat != null && _selectedLon != null && startTime != null && endTime != null) {
-        syms = nearestSymptomsAt(
-          points: heatmapService.points,
-          lat: _selectedLat!,
-          lon: _selectedLon!,
-          start: startTime!,
-          end: endTime!,
-        );
-      }
-      if (syms.isEmpty) {
-        chips.add(_InfoChip(label: 'No symptoms'));
+      if (code == -1) {
+        chips.add(_InfoChip(label: 'No Turmeric Detected', color: colorForPlantStatusCode(code)));
       } else {
-        for (final s in syms) {
-          chips.add(_InfoChip(label: s));
+        // Add a count chip
+        chips.add(_InfoChip(label: "count: $code", color: colorForPlantStatusCode(code)));
+        List<String> syms = [];
+        if (_selectedLat != null && _selectedLon != null && startTime != null && endTime != null) {
+          syms = nearestSymptomsAt(
+            points: heatmapService.points,
+            lat: _selectedLat!,
+            lon: _selectedLon!,
+            start: startTime!,
+            end: endTime!,
+          );
+        }
+        if (syms.isEmpty) {
+          chips.add(_InfoChip(label: 'No symptoms'));
+        } else {
+          for (final s in syms) {
+            chips.add(_InfoChip(label: s));
+          }
         }
       }
     } else {
