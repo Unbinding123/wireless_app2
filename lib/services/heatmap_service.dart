@@ -595,6 +595,68 @@ int encodePlantStatus(String status) {
   return 0; // Unknown
 }
 
+// Human-readable label for a plant status code
+String labelForPlantStatusCode(int code) {
+  switch (code) {
+    case 1:
+      return 'Healthy';
+    case 2:
+      return 'Anthracnose - Symptomatic (wilt)';
+    case 3:
+      return 'Anthracnose - Symptomatic (sunken spots)';
+    case 4:
+      return 'No Turmeric Detected';
+    case 5:
+      return 'Anthracnose - Symptomatic (yellowing)';
+    case 6:
+      return 'Anthracnose - Symptomatic (blight)';
+    case 7:
+      return 'Anthracnose - Symptomatic (lesions)';
+    default:
+      return 'Unknown';
+  }
+}
+
+// Color for a plant status code, consistent across app (heatmap/graph legends)
+Color colorForPlantStatusCode(int code) {
+  switch (code) {
+    case 1:
+      return const Color(0xFF2E7D32); // Healthy - green
+    case 2:
+      return const Color(0xFF8E24AA); // Anthracnose (wilt) - purple
+    case 3:
+      return const Color(0xFFD32F2F); // Anthracnose (sunken spots) - red
+    case 4:
+      return const Color(0xFF616161); // No Turmeric Detected - gray
+    case 5:
+      return const Color(0xFFFBC02D); // Anthracnose (yellowing) - yellow
+    case 6:
+      return const Color(0xFFEF6C00); // Anthracnose (blight) - orange
+    case 7:
+      return const Color(0xFF1E88E5); // Anthracnose (lesions) - blue
+    default:
+      return Colors.black.withOpacity(0.15); // Unknown
+  }
+}
+
+class PlantStatusCategoryItem {
+  final int code;
+  final String label;
+  final Color color;
+  const PlantStatusCategoryItem({required this.code, required this.label, required this.color});
+}
+
+List<PlantStatusCategoryItem> getPlantStatusLegendItems() {
+  const codes = [1, 2, 3, 4, 5, 6, 7];
+  return codes
+      .map((c) => PlantStatusCategoryItem(
+            code: c,
+            label: labelForPlantStatusCode(c),
+            color: colorForPlantStatusCode(c),
+          ))
+      .toList();
+}
+
 // This map defines the "optimal" range for each metric for color scaling.
 final Map<String, List<double>> optimalRanges = {
   'pH': [6.0, 7.5],
@@ -616,27 +678,8 @@ Color valueToColor(
   List<double>? optimalRangeOverride,
 }) {
   if (metric == 'Plant Status') {
-    // Map encoded plant status to fixed category colors
-    // 0: Unknown/None, 1: Healthy, 2..N: specific disease classes
-    final int code = value.isNaN ? 0 : value.round().clamp(0, 10);
-    switch (code) {
-      case 1:
-        return const Color(0xFF2E7D32); // Healthy - green
-      case 2:
-        return const Color(0xFF8E24AA); // Anthracnose (wilt) - purple
-      case 3:
-        return const Color(0xFFD32F2F); // Anthracnose (sunken spots) - red
-      case 4:
-        return const Color(0xFF616161); // No Turmeric Detected - gray
-      case 5:
-        return const Color(0xFFFBC02D); // Anthracnose (yellowing) - yellow
-      case 6:
-        return const Color(0xFFEF6C00); // Anthracnose (blight) - orange
-      case 7:
-        return const Color(0xFF1E88E5); // Anthracnose (lesions) - blue
-      default:
-        return Colors.black.withOpacity(0.15); // Unknown
-    }
+    final int code = value.isNaN ? 0 : value.round();
+    return colorForPlantStatusCode(code);
   }
   if (value.isNaN) {
     return Colors.black.withOpacity(0.1);

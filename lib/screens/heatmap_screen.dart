@@ -11,6 +11,7 @@ import '../widgets/heatmap_2d.dart';
 import '../widgets/heatmap_3d.dart';
 import '../widgets/heatmap_surface_3d.dart';
 import '../widgets/heatmap_legend.dart';
+import '../widgets/plant_status_legend.dart';
 import 'package:model_viewer_plus/model_viewer_plus.dart';
 import '../services/gltf_service.dart';
 import 'package:provider/provider.dart';
@@ -30,6 +31,7 @@ class HeatmapScreen extends StatefulWidget {
 class _HeatmapScreenState extends State<HeatmapScreen> {
   final heatmapService = HeatmapService();
   final List<String> metrics = [
+    'Plant Status',
     'pH',
     'Temperature',
     'Humidity',
@@ -37,7 +39,6 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
     'N',
     'P',
     'K',
-    'Plant Status',
     'All'
   ];
   String currentMetric = 'All';
@@ -67,6 +68,7 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
       try {
         final saved = context.read<AppSettings>().selectedMetrics;
         setState(() {
+          // Default: only numeric metrics selected; Plant Status off by default
           final base = metrics.where((m) => m != 'All' && m != 'Plant Status').toSet();
           selectedMetrics = saved.isNotEmpty ? saved : base;
         });
@@ -656,9 +658,8 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
                   if (gridData != null && gridData!.isNotEmpty)
                     Builder(builder: (context) {
                       final String label = selectedMetrics.length == 1 ? selectedMetrics.first : 'Average';
-                      // Hide numeric legend for categorical Plant Status
                       if (label == 'Plant Status') {
-                        return const SizedBox(height: 8);
+                        return const PlantStatusLegend(axis: Axis.horizontal, isDense: true);
                       }
                       return SizedBox(
                         height: 36,
