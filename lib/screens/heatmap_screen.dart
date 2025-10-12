@@ -30,6 +30,7 @@ class HeatmapScreen extends StatefulWidget {
 
 class _HeatmapScreenState extends State<HeatmapScreen> {
   final heatmapService = HeatmapService();
+  final HeatmapSurface3DController _surface3DController = HeatmapSurface3DController();
   final List<String> metrics = [
     'Plant Status',
     'pH',
@@ -128,6 +129,7 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
       final lat = lats[i];
       final lon = lons[i];
       if (t == null || lat.isNaN || lon.isNaN) continue;
+      final String? statusRaw = (parsed['plant_status']?.length ?? 0) > i ? parsed['plant_status']![i]?.toString() : null;
       final metrics = <String, double>{
         'pH': (parsed['pH']?[i] as double?) ?? double.nan,
         'Temperature': (parsed['temperature']?[i] as double?)?.toDouble() ?? double.nan,
@@ -136,15 +138,17 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
         'N': (parsed['N']?[i] as double?)?.toDouble() ?? double.nan,
         'P': (parsed['P']?[i] as double?)?.toDouble() ?? double.nan,
         'K': (parsed['K']?[i] as double?)?.toDouble() ?? double.nan,
-        // Encode plant status if present
-        if ((parsed['plant_status']?.length ?? 0) > i)
-          'Plant Status': encodePlantStatus(parsed['plant_status']![i]?.toString() ?? '').toDouble(),
+        // Encode plant status as symptom count if present
+        if (statusRaw != null)
+          'Plant Status': encodePlantStatus(statusRaw).toDouble(),
       };
       pts.add(HeatmapPoint(
         x: lonToX[lon] ?? 0,
         y: latToY[lat] ?? 0,
         t: t,
         metrics: metrics,
+        plantStatusRaw: statusRaw,
+        symptoms: statusRaw != null ? parseSymptomsFromStatus(statusRaw) : null,
       ));
     }
     return pts;
@@ -167,6 +171,7 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
       final lat = lats[i];
       final lon = lons[i];
       if (lat.isNaN || lon.isNaN) continue;
+      final String? statusRaw = (i < provider.plantStatus.length) ? provider.plantStatus[i] : null;
       final metrics = <String, double>{
         'pH': (i < provider.pH.length) ? provider.pH[i] : double.nan,
         'Temperature': (i < provider.temperature.length) ? provider.temperature[i] : double.nan,
@@ -175,8 +180,8 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
         'N': (i < provider.n.length) ? provider.n[i] : double.nan,
         'P': (i < provider.p.length) ? provider.p[i] : double.nan,
         'K': (i < provider.k.length) ? provider.k[i] : double.nan,
-        'Plant Status': (i < provider.plantStatus.length)
-            ? encodePlantStatus(provider.plantStatus[i]).toDouble()
+        'Plant Status': statusRaw != null
+            ? encodePlantStatus(statusRaw).toDouble()
             : double.nan,
       };
       pts.add(HeatmapPoint(
@@ -186,6 +191,8 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
         metrics: metrics,
         lat: lat,
         lon: lon,
+        plantStatusRaw: statusRaw,
+        symptoms: statusRaw != null ? parseSymptomsFromStatus(statusRaw) : null,
       ));
     }
     return pts;
@@ -252,11 +259,32 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
         chips.add(_InfoChip(label: "lat ${_selectedLat!.toStringAsFixed(5)}"));
         chips.add(_InfoChip(label: "lon ${_selectedLon!.toStringAsFixed(5)}"));
       }
-      // Then the human-readable Plant Status
+      // Show all symptoms for this selected cell (nearest sample)
       final v = _selectedValues!['Plant Status'] ?? double.nan;
       final code = v.isNaN ? 0 : v.round();
-      final label = labelForPlantStatusCode(code);
-      chips.add(_InfoChip(label: label, color: colorForPlantStatusCode(code)));
+      if (code == -1) {
+        chips.add(_InfoChip(label: 'No Turmeric Detected', color: colorForPlantStatusCode(code)));
+      } else {
+        // Add a count chip
+        chips.add(_InfoChip(label: "count: $code", color: colorForPlantStatusCode(code)));
+        List<String> syms = [];
+        if (_selectedLat != null && _selectedLon != null && startTime != null && endTime != null) {
+          syms = nearestSymptomsAt(
+            points: heatmapService.points,
+            lat: _selectedLat!,
+            lon: _selectedLon!,
+            start: startTime!,
+            end: endTime!,
+          );
+        }
+        if (syms.isEmpty) {
+          chips.add(_InfoChip(label: 'No symptoms'));
+        } else {
+          for (final s in syms) {
+            chips.add(_InfoChip(label: s));
+          }
+        }
+      }
     } else {
       // Always show indices first
       chips.add(_InfoChip(label: _selectedRow != null && _selectedCol != null ? "r=${_selectedRow}, c=${_selectedCol}" : "r=?, c=?"));
@@ -691,11 +719,10 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
   }
 
   void _reset3DView() {
-    // Not used in custom painter (double-tap inside canvas resets),
-    // but for the model_viewer, we can reload the scene to reset camera.
-    setState(() {
-      _modelViewerKey = UniqueKey(); // force widget reload
-    });
+    // For the custom 3D surface, call controller.reset().
+    // For the (unused) model_viewer path, keep reload fallback.
+    _surface3DController.reset();
+    setState(() { _modelViewerKey = UniqueKey(); });
   }
 
   @override
@@ -815,6 +842,7 @@ class _HeatmapScreenState extends State<HeatmapScreen> {
                                 maxValue: maxValue,
                                 optimalRangeOverride: _optimalRangeOverride,
                                 showIndices: true,
+                                controller: _surface3DController,
                                 onCellTap: (r, c) {
                                   if (r < 0 || c < 0) {
                                     setState(() { _selectedValues = null; _selectedRow = null; _selectedCol = null; });
